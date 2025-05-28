@@ -593,3 +593,1339 @@ const name = ref('header')
   </template>
 </List>
 ```
+# Fiber
+
+### **1. 为什么需要 Fiber？**
+
+- **旧版问题**：React 15的渲染是**同步递归**的， 协调器（Reconciler）通过递归方式同步构建和对比虚拟 DOM 树，若遇到复杂组件或大规模 DOM 更新时会**长时间阻塞主线程**，导致用户操作（如点击、滚动）无响应，页面卡顿。
+
+### **2. Fiber 架构通过三大核心改进优化了这一过程：**
+
+**① 任务切片：把大任务拆成小任务**
+
+- 做法：
+  - 将虚拟 DOM 树拆解为 **Fiber 节点链表**（每个节点是一个小任务）。
+  - 渲染时不再一次性递归完整个树，而是**每次只处理一个 Fiber 节点**，处理完就暂停。
+- 好处：
+  - 主线程不会被长时间占用，可及时响应其他操作（如用户点击）。
+
+**② 调度器：智能分配时间和优先级**
+
+- 时间分片：
+  - 把主线程时间划分为多个 **“时间片”**（但个任务在一帧内最大执行时间）。
+  - 每个时间片内执行一部分任务，超时就暂停，让浏览器有时间渲染页面。
+  - 类比：就像挤地铁，每次车门开的瞬间（浏览器空闲）挤进去一点人（执行一点任务），车门要关了就停下（暂停）。
+- 优先级管理：
+  - 为不同任务分配优先级（如用户交互 > 数据加载 > 低优先级更新）。
+  - 高优先级任务（如点击事件）可中断低优先级任务，优先处理。
+- 协作式调度：
+  - 任务执行过程中可暂停、恢复、调整顺序，类似多人协作分工。
+
+**③ 增量渲染与双缓存：高效更新 DOM**
+
+- **增量渲染**：
+  - 协调器（Reconciler）分阶段构建 Fiber 树，标记需要更新的节点（如新增、删除）。
+  - 然后，渲染器（Renderer）最后**批量更新真实 DOM**，减少重排和重绘次数。
+- **双缓存机制**：
+  - 内存中同时维护两棵 Fiber 树：
+    - **current Fiber**：当前显示在页面上的。
+    - **workInProgress Fiber**：正在计算的新树。
+  - 计算完成后，直接切换两棵树，实现无缝更新。如果出错，可回滚到旧树。
+
+### 3. 下一个要执行的 Fiber 任务呢
+
+- 使用 深度优先遍历 + 链表指针：
+  1. 先处理当前节点（比如 `<div>`）。
+  2. 如果有子节点（如 `<div>` 里的 `<p>`），优先处理子节点。
+  3. 子节点处理完，通过 `sibling` 指针找下一个兄弟节点（如 `<p>` 的兄弟 `<span>`）。
+  4. 兄弟节点都处理完，通过 `return` 指针回到父节点。
+
+- 类比：就像玩游戏时，先通关当前关卡的所有小 BOSS（子节点），再打下一个关卡（兄弟节点），打完所有关卡回主城（父节点）。
+
+### 4. 如何中断和恢复
+
+- Fiber 架构通过 **全局指针** 和 **链表结构** 实现任务的中断和恢复：
+  1. **全局指针**：`workInProgress` 指向当前正在处理的 Fiber 节点
+  2. **中断时**：保存 `workInProgress` 指针
+  3. **恢复时**：从 `workInProgress` 指针指向的节点继续执行
+
+- 怎么知道结束了？
+  - `workInProgress` 指针为 `null`（表示没有待处理的工作单元）
+  - 所有 Fiber 节点的副作用（如 DOM 更新）已收集到 `effectList` 中
+
+
+### 5. Fiber 的工作阶段：render 阶段和 commit 阶段
+
+- render 阶段：构建 Fiber 对象，构建链表，在链表中标记要执行的 DOM 操作 ，可中断。
+
+- commit 阶段：根据构建好的链表进行 DOM 操作，不可中断。
+
+# react diff
+
+React的Diff算法是一种用来高效更新页面的机制。简单来说，当你修改React组件的数据时，它不会直接去操作真实的DOM（因为DOM操作很慢），而是先在内存里对比新旧“虚拟DOM”的差异，只更新需要变化的部分。
+
+ 这个对比过程有三个关键策略： 
+
+1. **树形比较**：React只会比较同一层级的DOM节点。比如，如果你把一个节点从父节点A移到父节点B，React不会识别出这是“移动”，而是会直接删A建B。所以尽量避免跨层级移动节点。 
+2. **组件比较**：对于React组件，类型相同只更新组件内部变化的部分；类型不同（比如从`<Button>`变成了`<Input>`）就直接整个替换掉。你还可以通过`shouldComponentUpdate`这个函数来手动控制组件是否需要更新。
+3. **元素比较**：当处理列表元素（比如用`map`渲染多个子元素）时，React需要你给每个元素一个唯一的`key`（比如ID）。这样它就能知道这些元素是增删改？。如果不用key，React默认会按顺序比较元素，一旦列表顺序变了（比如插入一个新元素），就可能导致性能问题或显示错误。 
+
+另外，React 16之后引入了Fiber架构，把这个对比过程变成了“可打断的”。也就是说，它不会一次性算完所有差异，而是拆分成很多小任务，这样不会阻塞浏览器渲染页面，用户体验会更好。
+
+整个更新过程分成两个阶段：第一阶段计算差异生成 workInProgress Fiber 树（可打断render），第二阶段实际更新DOM（不可打断commit，执行生命周期钩子（如 `componentDidMount`）和副作用（如 useEffect））。 
+
+最后，使用Diff算法时要记住：给列表元素加稳定的key（别用index），避免跨层级移动节点，合理使用`React.memo`或`shouldComponentUpdate`来减少不必要的比较，这样你的React应用会跑得更快。O (n³) 复杂度降至 O (n）
+
+
+
+# class组件和函数组件
+
+- class：基于es6的class定义组件，接收props，返回react元素。它是数据和逻辑的封装。 也就是说，组件的状态和操作⽅法是封装在⼀起的。
+
+- 函数：主要就是返回一个值。数据和操作是隔离的。函数就是返回组件的 HTML 代码，返回结果只依赖于它的参数。不改变函数体外部数据、函数执⾏过程⾥⾯没有副作⽤。
+
+- class缺点
+
+  - 难拆分、难测试
+
+  - 业务逻辑分散在各个组件中，会冗余。
+
+  - 引入了复杂编程，render props
+
+  - this
+
+- 区别
+
+  - 函数组件性能高
+    class需要实例化，函数只需要执行返回结果即可
+
+  - 函数：无状态组件（实例，state，生命周期，this），纯函数，依赖props
+
+  - 调用方式
+
+    - 函数：重新调用方法返回新的react元素
+
+    - class：new一个新的实例（this是可变的），然后render返回react元素。
+
+    - 操作中改变状态值，函数会按照顺序返回状态。class会直接获取到最新的状态
+
+  |              | 函数                | class |
+  | ------------ | ------------------- | ----- |
+  | 编写方式     |                     |       |
+  | 状态管理     | hooks出现前，无状态 |       |
+  | 生命周期     | 无                  |       |
+  | 调用方式     |                     |       |
+  | 获取渲染的值 |                     |       |
+
+  
+
+# 函数组件模拟生命周期
+
+```javascript
+// componentDidMount()  // componentWillUnmount() 
+useEffect(() => {
+    console.log('Component mounted');
+    // 在这里执行挂载后的操作，类似于 componentDidMount
+    return () => {
+      console.log('Component will unmount');
+      // 在组件即将卸载时执行清理操作
+    };
+  }, []); // 第二个参数是空数组，表示只在组件挂载和卸载时执行
+```
+
+```javascript
+// componentDidUpdate() 可以比较前后的 props 或 state 变化
+import React, { useEffect, useState } from 'react';
+function MyComponent(props) {
+  const [data, setData] = useState(props.data);
+  useEffect(() => {
+    console.log('Component updated');
+    if (data !== props.data) {
+      console.log('Data changed');
+    }
+  }, [data, props.data]);
+  return (
+    <div>
+      <button onClick={() => setData('New Data')}>Change Data</button>
+    </div>
+  );
+}
+```
+
+# hooks （react16.8新增）
+
+- 好处：
+
+  - 为函数组件赋能，让函数组件能处理状态和副作用（除了正常渲染处理数据外的事，修改dom，请求数据等）
+  - 解决class组件逻辑复用困难，避免高阶组件嵌套
+  - 摆脱this
+  - 代码是按功能聚合，不是生命周期，可读性和可维护性较高。
+
+- 必须在函数组件内使用，因为它依赖react上下文
+
+- **useState()** //状态钩⼦
+
+  - 管理 state，让函数组件具有维持状态的能力
+
+  - state 中永远不要保存可以通过计算得到的值（url，props，cookie，loacalstorage）
+
+  - class和函数组件的区别
+
+    - 类组件中 setState 只能有一个，一个对象，不同的属性来标识不同状态
+
+    - setState 可有多个，更加语义化，更加方便使用。
+
+- useReducer() 复杂状态管理  ，状态转换机器
+
+  - action：发生什么；dispatch：发送给reducer；reducer：处理state；返回一个新的state
+
+  <img src="/Users/burst/Library/Application Support/typora-user-images/image-20250526155534509.png" alt="image-20250526155534509" style="zoom:25%;" />
+
+  - 优势： 
+
+    - 处理复杂状态逻辑（对象、依赖关系等，更新逻辑会分散到很多地方），会将状态和更新逻辑集中，可以和ui分离开。
+    - 可读性、可和维护性。可测试性（可以直接给reducer函数各种state组合测试）
+
+  - 注意：不能影响外部（api，dom操作等）；不能直接改state，需返回全新状态（对象可能会因为修改的是引用地址检测不到更新）。
+
+  - ```javascript
+    const counterReducer = (state, action) => {
+      switch (action.type) {
+        case 'increment':
+          return { count: state.count + 1 };
+        case 'decrement':
+          return { count: state.count - 1 };
+        case 'reset':
+          return { count: action.payload }; // payload 是可选的额外数据
+        default:
+          throw new Error('未知 action');
+      }
+    };
+    const [state, dispatch] = useReducer(counterReducer, { count: 0 });
+    <button onClick={() => dispatch({ type: 'increment' })}>+1</button>
+    ```
+
+- **useContext()** //共享状态钩⼦
+
+  - 通过context实现跨层级共享状态
+
+    ```javascript
+    //父
+    const FatherContext = React.createContext('light');
+    <FatherContext.Provider  value={{ currentUser, setCurrentUser }}>      
+        <Toolbar />    
+    </FatherContext.Provider>
+    //子
+    const { currentUser, setCurrentUser } = useContext(FatherContext);
+    ```
+
+- **useEffect()** //副作⽤钩⼦
+
+  - useEffect是会在整个⻚⾯渲染完才会调⽤的代码
+
+- **useLayoutEffect**
+
+  - 在react完成DOM更新后⻢上同步调⽤的代码，会阻塞⻚⾯渲染。componentDidMount&componentDidUpdate
+
+- **useRef** 保存引⽤值
+
+  - 主要用于获取 DOM 节点、存储不影响渲染逻辑的变量，以及在多次渲染之间保持数据。
+  - `ref` 只是一个普通对象，其<u>变化不会触发渲染</u>
+  - 可以通过 ref.current 值访问组件或真实的 DOM 节点，重点是组件也是可以访问到的，从⽽可以对 DOM 进⾏⼀些操作
+
+- **useImperativeHandle**
+
+  - 自定义通过 ref 暴露给父组件的实例值
+
+  - 让⽗组件获取⼦组件内的索引
+
+    ```javascript
+    // 父
+    <SearchHistory ref={historySearch} />
+    historySearch.current?.submit()
+    ```
+
+    ```javascript
+    //子
+    const SearchHistory = forwardRef((props, ref) => {
+      useImperativeHandle(ref, () => ({
+        submit: () => { /* ... */ }
+      }));
+      return <div>
+    });
+    ```
+
+- **useCallback** 缓存函数，避免子组件不必要渲染
+
+  - ~~函数组件转class组件的语法糖。重新渲染时，函数组件会将代码全都执行，方法会重新生成的。usecallback会缓存一个方法，重新渲染时不会重新生成。~~
+
+  - ```javascript
+    const memoizedCallback = useCallback(() => { doSomething(a, b) }, [a, b],);//依赖项发生变化时才重新创建函数
+    ```
+
+  - 使用场景：子组件使用 `React.memo` （缓存组件的渲染结果）时才有明显效果；性能瓶颈处使用
+
+    ```javascript
+    const MyComponent = React.memo(function MyComponent(props) {
+      /* 使用 props 渲染 */
+    });
+    ```
+
+- **useMemo** 缓存高开销的计算结果
+
+  - `const memoizedValue = useMemo(() => computeExpensiveValue(a, b), [a, b]);//依赖项发生变化时才重新计算`
+  - props可以控制子组件渲染
+  - useCallback 不会执⾏第⼀个参数函数，⽽是将它返回给你，⽽ useMemo 会执⾏第⼀个函数并且将函数执⾏结果返回给你。
+
+
+## hooks比class好处
+
+| class                                                        | hooks                                                    |
+| ------------------------------------------------------------ | -------------------------------------------------------- |
+| `this` 指向混乱、构造函数冗余                                | 无需绑定this，无需构造函数，消除样板化代码               |
+| 相关逻辑分散在不同生命周期方法中，如 `componentDidMount` 和 `componentWillUnmount` | `useEffect` 将相关逻辑放在一起                           |
+| 高阶组件和 render props 导致组件嵌套过深（"嵌套地狱"）。     | 自定义 Hook 提取可复用逻辑                               |
+| 复杂的类型定义（如 `this` 的类型、生命周期方法的类型）       | 与ts更好集成，自动推导类型，减少模板代码                 |
+| shouldComponentUpdate和 `React.PureComponent` 只能进行浅比较 | 更细粒度的渲染控制React.memo` + `useCallback` + `useMemo |
+| 依赖 `this` 和生命周期方法，测试时需要模拟组件实例           | 纯函数，容易测试                                         |
+|                                                              | 学习成本小                                               |
+
+# useState为什么不能放判断里
+
+**核心限制原因**
+
+- **链表结构依赖顺序**：React 通过调用顺序（链表索引）来关联状态和 Hooks。if会导致状态与变量完全错乱。
+- **多次渲染的一致性**：必须保证每次渲染时 Hooks 的调用顺序完全相同。（React 在 **开发模式** 中会维护一个 `renderPhaseHooks` 数组，用于验证 Hooks 调用顺序，`renderPhaseHooks` 的长度会与预期不符，React 会抛出警告："Invalid hook call. Hooks must be called in the exact same order in every render."）
+- **性能优化**：避免动态创建和销毁 Hooks 对象，提高渲染效率。
+
+# react组件通信
+
+- ⽗组件向⼦组件通信：props传递数据or函数
+
+- ⼦组件向⽗组件通信：父定义callback，通过props传递子组件，子组件将要传递的子通过callback传
+
+- 状态提升（兄弟组件通信）：将共享状态提升到最近的共同父组件，通过 props 传递数据和回调
+
+  ```javascript
+  // 父组件 
+  function Parent() {  
+    const [count, setCount] = useState(0);    
+    return (<div><IncrementButton onIncrement={() => setCount(count + 1)} />
+  					<DisplayCount count={count} />    </div>  ); } 
+  // 兄弟组件1 
+  function IncrementButton({ onIncrement }) {  return <button onClick={onIncrement}>Increment</button>; } 
+  // 兄弟组件2 
+  function DisplayCount({ count }) {  return <p>Count: {count}</p>; }
+  ```
+
+- Context API（跨层级通信）：创建context组件ThemeContext，provide一个value，深层子组件可以通过useContext(ThemeContext)取到value
+
+  ```javascript
+  // 创建 Context
+  const ThemeContext = React.createContext();
+  // 提供者组件
+  function App() {
+    const [theme, setTheme] = useState('light');
+    
+    return (
+      <ThemeContext.Provider value={{ theme, setTheme }}>
+        <Header /> {/* 深层子组件 */}
+      </ThemeContext.Provider>
+    );
+  }useReducer + Context（轻量级状态管理）
+  // 深层子组件
+  function Header() {
+    const { theme } = useContext(ThemeContext);
+    
+    return (
+      <header className={theme}>
+        <h1>Welcome</h1>
+      </header>
+    );
+  }
+  ```
+
+- EventBus：定义个全局事件总线，eventBus.emit发送 ，on接收。
+
+  ```javascript
+  // 创建事件总线 
+  class EventEmitter {  
+    constructor() {    this.events = {};  }    
+    on(event, callback) {    this.events[event] = (this.events[event] || []).concat(callback);  }    
+    emit(event, data) {    (this.events[event] || []).forEach(callback => callback(data));  } 
+  } 
+  const eventBus = new EventEmitter(); 
+  // 发送组件 
+  function Sender() {  const sendData = () => {    eventBus.emit('data', 'Hello from sender!');  };    return <button onClick={sendData}>Send</button>; } 
+  // 接收组件 
+  function Receiver() {  useEffect(() => {    const handler = (data) => console.log('Received:', data);    eventBus.on('data', handler);        return () => eventBus.off('data', handler); // 清理  
+  }, []);    return <div>Listening for data...</div>; }
+  ```
+
+- 状态管理库（Redux/MobX/Recoil）
+
+- useReducer + Context（轻量级状态管理）
+
+  ```javascript
+  // 创建 Context
+  const CounterContext = React.createContext();
+  
+  // 定义 reducer
+  const counterReducer = (state, action) => {
+    switch (action.type) {
+      case 'INCREMENT':
+        return state + 1;
+      default:
+        return state;
+    }
+  };
+  
+  // 提供者组件
+  function CounterProvider({ children }) {
+    const [count, dispatch] = useReducer(counterReducer, 0);
+    
+    return (
+      <CounterContext.Provider value={{ count, dispatch }}>
+        {children}
+      </CounterContext.Provider>
+    );
+  }
+  
+  // 使用组件
+  function CounterDisplay() {
+    const { count } = useContext(CounterContext);
+    
+    return <p>Count: {count}</p>;
+  }
+  ```
+
+  
+
+- refs（DOM 引用与组件通信，父子）
+
+- 路由参数
+
+- WebSocket
+
+  ```javascript
+  function ChatRoom() {
+    const [messages, setMessages] = useState([]);
+    useEffect(() => {
+      const socket = new WebSocket('ws://example.com');
+      socket.onmessage = (event) => {
+        setMessages(prev => [...prev, JSON.parse(event.data)]);
+      };    
+      return () => socket.close();
+    }, []); 
+    const sendMessage = (text) => {
+      socket.send(JSON.stringify({ text }));
+    };  
+    return (
+      <div>
+        {messages.map(msg => <p>{msg.text}</p>)}
+        <input onKeyPress={sendMessage} />
+      </div>
+    );
+  }
+  ```
+
+# redux
+
+- Redux就是一个js容器，用于全局的状态管理
+
+<img src="https://i-blog.csdnimg.cn/direct/69ee4d6ca43942ccb990c9e5dc6adedf.png" alt="img" style="zoom:25%;" />
+
+- 为什么用？
+
+​	React是单向数据流，数据就是父通过props传递，子父就是通过传递函数的方式来传递修改值。数据较复杂就要用
+
+- 核心
+
+  - 单一数据源。state存在reducer里，这个reducer只存在唯一store
+  - state是只读的。改state通过action，store.dispatch(action)
+  - 使用reducer来进行修改。
+
+- 组成
+
+  - store：
+
+    ```javascript
+    const store = createStore(reducer)  // createStore方法是redux提供的
+    store.getState()：//获取reducer中返回的state数据；
+    store.subscribe()：//用来注册监听state是否改变；
+    store.dispatch()：//用于发送action，来修改reducer中的state数据；
+    ```
+
+  - reducer：是一个函数，接收state、action，生成新的state
+
+    ```javascript
+    const initState={...}
+    export default (state=initState,action)=>{
+    	const newState = JSON.parse(JSON.stringfy(state)) ; // 由于reducer不能直接修改state，所以做下深拷贝
+    	if(action.type === XXX){
+    		.....    // 这块就是针对不同的action type，对数据进行不同的处理，处理完后，将最新处理完后的nesState返回给store
+    	}
+    	return newState；
+    }
+    
+    ```
+
+  - action：js对象，有type表示执行的动作
+
+- 使用场景
+
+  - 获取其他组件的实时状态
+
+  - 需要改变其它组件状态
+
+  - 尽量不用
+
+# setState()
+
+# 生命周期()
+
+# React15
+
+- 使用循环递归虚拟DOM，使用js执行栈，需执行到任务完成为止。若虚拟dom树较深，会长时间占用主线程，此时无法进行其他操作，使页面卡顿。
+
+# React16
+
+- 使用循环来模拟递归，diff过程是占用浏览器的空闲时间，解决页面卡顿。
+
+- 三层模型
+
+  - Scheduler (调度层)：调度任务的优先级，高优任务优先进入协调器
+
+  - Reconciler (协调层)：构建 Fiber 数据结构，比对 Fiber 对象找出差异, 记录 Fiber 对象要进行的 DOM 操作。（15是找差异立刻更新。）
+
+  - Renderer (渲染层)：负责将发生变化的部分渲染到页面上。（16可中断，15不可）
+
+# React19
+
+- 创建了“React 编译器”。现在将管理这些重新渲染。React 将自动决定何时以及如何更改状态并更新 UI
+
+- 服务器组件
+
+  - 所有组件默认都是客户端的。只有当你使用 ‘use server’ 时，组件才是服务器组件
+
+  - 优势：
+
+    - SEO：服务器渲染的组件通过向网络爬虫提供更可访问的内容来增强搜索引擎优化。
+
+    - 性能提升：服务器组件有助于更快地加载页面和改善整体性能，特别是对于内容密集型应用程序。
+
+    - 服务器端执行：服务器组件使在服务器上执行代码变得无缝和高效，使诸如 API 调用之类的任务变得轻松。
+
+- 动作：将让你将动作集成到 HTML 标签 中。
+  原：<form onSubmit={search}>客户端上运行
+  现：<form action={submitData}>在客户端或服务器端
+
+- Web 组件： 在React 应用程序中利用现有的 Web 组件生态系统
+
+- 文档元数据：直接在我们的 React 组件中使用 title 和 meta 标签
+
+- 资源加载
+  图像和其他文件将在用户浏览当前页面时在后台加载。这个改进应该有助于改善页面加载时间并减少等待时间。
+  引入了用于资源加载的生命周期 Suspense，包括脚本、样式表和字体。这个特性使 React 能够确定内容何时准备好显示，消除了任何“未样式化”闪烁。
+
+- React Hooks： 
+
+  - 新的 use() 钩子：简化我们如何使用 promises、async 代码和 context
+    const value = use(resource);
+
+  - useFormState() 钩子：允许你基于表单提交的结果来更新状态。
+    const [state, formAction] = useFormState(fn, initialState, permalink?);
+    fn：当表单提交或按钮被按下时要调用的函数。
+    initialState：你希望初始状态是什么值。它可以是任何可序列化的值。在首次调用后，此参数将被忽略。
+    permalink：这是可选的。一个 URL 或页面链接，如果 fn 将在服务器上运行，则页面将重定向到 permalink。
+
+  - useFormStatus()钩子
+    const { pending, data, method, action } = useFormStatus();
+    pending：如果表单处于挂起状态，则为 true，否则为 false。
+    data：一个实现 FormData 接口的对象，包含父级 正在提交的数据。
+    method：HTTP 方法 – GET 或 POST。默认情况下为 GET。
+    action：一个函数引用。
+
+  - useOptimistic() 钩子
+    允许你在异步操作进行中显示不同的状态
+    const [ optimisticMessage, addOptimisticMessage] = useOptimistic(state, updatefn)
+
+# 避免react重复渲染的手段
+
+- 使用React.memo() 包裹组件，缓存组件渲染结果
+- 使用useMemo() 缓存复杂计算结果
+- 使用useCallback() 缓存函数引用
+- 使用useRef() 创建不变的引用对象
+- 使用React.Fragment 包裹组件，避免额外DOM节点
+- 使用React.StrictMode 包裹组件，检查潜在问题
+
+# this
+
+- 全局作用域：this是window（浏览器环境）、global（node环境）
+
+- 函数指向window（严格模式undefined）；对象指向对象；构造函数指向新创建对象
+
+- 箭头函数this是继承外部函数
+
+- dom指向触发事件的元素
+
+- call、apply 或 bind改变内部指向
+  bind：返回一个新的函数，新函数的 this 指向被绑定为指定的值
+  call、apply：立即调用函数，并且第一个参数是 this 的指向
+  `​function.call(new,arg1, arg2, ...])`
+
+  `fuction.bind(obj)`
+
+  `function.apply(new, [arg1, arg2, ...])`
+
+# bind，call，apply
+
+```
+Function.prototype.myBind = function(context, ...args) {
+  const originalFunc = this
+
+  return function(...newArgs) {
+    const combinedArgs = args.concat(newArgs)
+    const result = originalFunc.apply(context, combinedArgs)
+    return result
+  }
+}
+```
+
+```
+Function.prototype.myCall = function(context, ...args) {
+  // 1. 处理 undefined 和 null 的上下文
+  context = context || window; // 浏览器环境用 window，Node.js 需改为 globalThis
+  // 2. 创建唯一键避免属性覆盖
+  const fnKey = Symbol('__tempFn__');
+  // 3. 将当前函数绑定到上下文
+  context[fnKey] = this; // this 指向原函数
+  // 4. 执行函数并保存结果
+  const result = context[fnKey](...args);
+  // 5. 清理临时属性
+  delete context[fnKey];
+  // 6. 返回执行结果
+  return result;
+};
+```
+
+```
+Function.prototype.myApply = function(context, argsArray) {
+  // 类型安全检查
+  if (typeof this !== 'function') {
+    throw new TypeError('调用者必须是函数');
+  }
+  // 处理上下文
+  context = context != null ? Object(context) : window;
+  // 创建唯一键
+  const fnKey = Symbol('fn');
+  // 绑定函数
+  context[fnKey] = this;
+  // 参数处理
+  let result;
+  if (!argsArray) {
+    result = context[fnKey]();
+  } else {
+    if (!Array.isArray(argsArray) && !isArrayLike(argsArray)) {
+      throw new TypeError('第二个参数必须为数组或类数组');
+    }
+    result = context[fnKey](...Array.from(argsArray));
+  }
+  // 清理
+  delete context[fnKey];
+  return result;
+};
+```
+
+# new
+
+1. 新建了一个空对象
+2. 对象的（`__proto__`）属性指向构造函数的prototype 
+3. 绑定this
+4. 执行构造函数后返回这个对象
+
+# 原型
+
+是JavaScript语言中固有的特性
+
+**原理**：对象引用了另一个对象来获取该对象的属性和方法。
+
+prototype（原型）：通过调用构造函数而创建的所有对象实例的原型对象
+
+每个函数都有 一个prototype 属性指向一个原型对象，原型对象包含特定类型的所有实例共享的属性和方法。
+
+每个对象（除null）都有 `__proto__` 属性，这个属性指向了创建该对象的构造函数的原型。而原型对象也通过`__proto__`指向它自己的原型对象，层层向上直到Object.prototype，这样就形成了原型链。
+
+是否是该对象的原生属性：teacher.hasOwnProperty('name')
+
+**特点**：
+当访问对象属性时，如果对象内部没有这个属性，就会沿着原型链一直往上找；
+当修改原型时，与之相关的对象也会继承这一改变。
+![在这里插入图片描述](https://img-blog.csdnimg.cn/2020073011130453.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2J1cnN0Z2lybHM=,size_16,color_FFFFFF,t_70)
+
+Person.prototype.name 这种的写法是在原有的基础上把值改了。 改的是属性，也就是房间里面的东西。
+而 Person.prototype={name:’ cherry’ }是把原型改了，换了新的对象。 改了个房间。_proto_指向的空间不变。
+
+**构造函数、原型、实例之间的关系**
+
+每个实例对象（ object ）都有一个私有属性（称之为 `__proto__ `）指向它的构造函数的原型对象（**prototype** ）。该原型对象也有一个自己的原型对象( `__proto__ `) ，层层向上直到一个对象的原型对象为 `null`。根据定义，`null` 没有原型，并作为这个**原型链**中的最后一个环节。
+
+每个构造函数都有一个原型对象(prototype)，原型对象都包含一个指向构造函数的指针（constructor），而实例都包含一个指向原型对象的内部指针（`__proto__`）。
+
+Object.create(原型);
+Object.prototype 是原型链的终端
+
+# 作用域let，const，var
+
+- 变量与函数的访问范围
+
+  - 全局作用域：在程序任何地方都能访问，eg：window属性
+
+  - 函数作用域：固定代码片段使用
+
+- 创建函数，即声明当前函数作用域（上下文）
+
+- 作用：隔离变量
+
+- 作用域链：变量在创建函数的作用域取值。没查到就去上级查，直到全局作用域。这个查找的过程链
+
+- 变量
+
+  |          | var  | let  | const |
+  | -------- | ---- | ---- | ----- |
+  | 块       | ❌    | ✅    | ✅     |
+  | 先声明   | ❌    | ✅    | ✅     |
+  | 重复声明 | ✅    | ❌    | ❌     |
+
+  建议用let，const块级作用域替代闭包
+
+# 闭包
+
+- what
+
+​	有权访问另一个函数作用域的中变量的函数
+
+​	js变量作用域属于函数作用域，函数执行完，作用域会被清理，内存被回收。 闭包的函数是建立在内部子函数（闭包）上，它可以访问上级作用域，上级执行完，作用域也不会被清理。 
+
+- 特性
+
+  可以访问定义它们的外部变量
+
+  保护：区域中私有变量不受外界影响，避免全局变量污染
+
+  保存：将外部作用域中变量存储在内存中，而非函数
+
+- 实现
+
+  函数嵌套。eg：一个函数的返回值是另一个函数，即函数和它的执行环境形成了一个闭包
+
+  ```
+  function addFn() { 
+  	let a = 1;
+  	return function () {a++; return a;} 
+  }
+  let newFn = addFn();
+  ```
+
+  内部函数引用外部函数局部变量，延长外部变量生命周期
+
+  <img src="/Users/burst/Library/Application Support/typora-user-images/image-20250528145910084.png" alt="image-20250528145910084" style="zoom:25%;" />
+
+- 用途
+
+  模仿块级作用域
+
+  封装私有化变量
+
+  **节流**：控制事件触发频率
+
+  ```
+  function throttle(fn, wait) {
+  	let flag = false;
+  	return function () {
+  		if (flag == false) {
+  			flag = true
+  			timer = setTimeout(() => {
+  				fn();flag = false;
+  			}, wait);                
+  		}           
+  	}        
+  }
+  ```
+
+  防抖：事件触发后，应在一定的时间后才能生效
+
+  ```
+  function debounce(callbackFn, interval) {
+  	var flag = null            
+  	return function () {                
+  		clearTimeout(flag)                
+  		flag=setTimeout(()=>{callbackFn()},interval)
+  	}        
+  }
+  ```
+
+- bad：内存泄漏
+
+- good：延长局部变量生命周期
+
+# 垃圾回收
+
+- why：内存不释放，页面性能会变慢。即内存泄漏（全局变量、闭包、Dom元素引用、定时器）
+
+- 浏览器有垃圾回收机制，定期找出不继续使用的变量来释放
+
+- method: 标记清除
+
+  - 变量进入执行环境，被“标记进入”。离开时被“标记离开”。会销毁离开的值并释放内存
+
+  - google浏览器：不定时查找当前内存引用，无占用则清除
+
+  - ie浏览器：引用计数。占用1次+1，移除-1。0时回收
+
+- 优化：手动释放，内存优化，取消占用内存
+
+# eventloop
+
+- why
+
+  js单线程，防止函数执行时间过长阻塞代码。
+
+- 运行机制
+
+  1、会先执行同步栈代码 2、执行异步队列中微任务(清空)， 3、执行宏任务 for（取一个宏，放进任务队列执行，执行微）。
+
+- 宏任务
+
+  ajax、setTimeout、setInterval、script
+
+- 微任务
+
+  promise.then、MutationObserver   process.nextTick
+
+- node环境
+
+  - 基于v8引擎运行在js环境
+
+  - 比基本eventloop多：I/O、网络操作
+
+  - 执行顺序
+
+    - timer：setTimeout、setInterval
+
+    - pending callback：调用上一次事件循环没在 poll 阶段立刻执行，而延迟的 I/O 回调函数
+
+    - idle，prepare
+
+    - poll：检索I/O，执行回调
+
+    - check : 执⾏ setImmediate 回调
+
+    - close callbacks : 执⾏ close 事件的 callback
+
+# promise（。。）
+
+Promise 是现代 Web 异步开发的重要组成部分，基本上目前所有的 Web 应用的异步开发手段都是通过 Promise 来实现的。
+
+**概念**
+
+所谓 Promise，就是一个容器对象，里面保存着某个未来才会结束的事件（异步事件）的结果。Promise 是一个构造函数，它有三个特点：
+
+1.  Promise 有三个状态：pending（进行中）、fulfilled（成功）和 reject（失败），并且状态不受外部影响。
+2.  状态一旦改变就无法修改，并且状态只能从 pending 到 fulfilled 或者是 pending 到 reject。
+3.  Promise 一旦创建就会立即执行，不能中途取消。
+
+**用法**
+
+在 Promise 诞生之前，Web 应用中的异步开发主要采用的是回调函数的模式（详情可以参考 node.js 各个 API），回调函数的一大缺点就是，当我们的一个异步结果需要使用另外一个异步结果时，就会产生回调嵌套，一旦这样的嵌套多了，就会变成回调地狱，十分影响代码观感。
+
+而 Promise 的诞生一定程度上解决了这个问题，因为 Promise 是采用链式调用的方式，并且在 Promise 返回的 Promise 对象中的 then、catch 等一系列方法都会返回一个新的 Promise 对象。
+
+**then 方法**
+
+当 Promise 实例创建成功后，可以执行其原型上的 then 方法。then 方法接受两个参数，分别是当前 Promise 的成功回调和失败回调，并且这两个函数会自动返回一个新的 Promise 对象。
+
+then 方法的成功回调如果返回的是一个 Promise 对象，那么只有当这个 Promise 对象状态发生改变之后，才会执行下一个 then。
+
+**catch 方法**
+
+Promise 原型上还有一个 catch 方法，它会捕获在它链式之前的所有未被捕获的错误（一旦前面的错误被捕获，就不会执行）。
+
+catch 只是捕获异常，catch 并不能终止当前 Promise 的链式调用。
+
+同样的，catch 方法也会自动返回一个新的 Promise 对象，一旦显示返回一个 Promise，那么只有当这个 Promise 对象状态发生改变时，链式调用才会继续往下走。
+
+**finally 方法**
+
+在 ES8 中新加入的方法，此方法和 then、catch 不同，它不会跟踪 Promise 的状态，即不管 Promise 最终变成了什么状态，都会执行这个方法，同时 finally 不接收任何参数。
+
+同样的，finally 并不是链式调用的终点，它也会自动返回一个新的 Promise 对象。
+
+**Promise.all()** // 并发执行多个Promise，返回一个Promise，所有Promise都成功时返回成功结果，有一个失败则返回失败结
+
+**Promise.allSettled()** // 并发执行多个Promise，返回一个Promise，所有Promise都成功或失败时返回成功或失败结果 
+
+**Promise.any()** // 并发执行多个Promise，返回一个Promise，只要有一个Promise成功则返回成功结果，所有Promise都失败则返回失败结果 
+
+**Promise.race()** // 并发执行多个Promise，返回一个Promise，只要有一个Promise成功或失败则返回成功或失败结果 
+
+**Promise.resolve()** // 返回一个成功的Promise
+
+**Promise.reject()** // 返回一个失败的Promise
+
+# 普通函数/箭头函数/new
+
+- 箭头函数
+
+  - 无this，可从上层作用域继承
+
+  - this指向不变，不会因为谁调用改变
+
+  - 不能new构造对象
+
+  - 无arguments
+
+  - 无prototype
+
+- new
+
+  - 生成对象
+
+  - this指向该对象
+
+  - 执行构造函数
+
+  - 返回该对象
+
+  ```
+  // 手写new
+  const newInstance = (fn, ...args) => {
+    const obj = Object.create(fn.prototype) // 创建一个新对象，继承构造函数的原型
+    const res = fn.apply(obj, args) // 将构造函数的this指向新创建的对象，并传入参数
+    return res instanceof Object ? res : obj // 如果构造函数返回的是一个对象，则返回该对象，否则返回新创建的对象
+  }
+  ```
+
+  
+
+# 深拷贝/浅拷贝
+
+- 浅拷贝：拷贝对象，属性是引用类型，两个对象共享一块内存，修改一个对影响另一个.
+  Object.assign(target, ...sources) 或  {...obj} 或 Array.slice()或[...arr]
+
+- 深拷贝：会递归地复制原始对象的所有属性，生成是一个新对象
+
+  ```javascript
+  JSON.parse(JSON.stringify(obj)) 
+  //或
+  function deepCopy(obj,cache = new WeakMap()) { 
+  	if (obj === null || typeof obj !== 'object') {return obj;} //obj为原始值，直接返回
+    if (cache.has(obj)) return cache.get(obj); // ******处理循环引用
+  	const copy = Array.isArray(obj) ? [] : {};    
+    cache.set(obj, copy); // ******缓存当前对象
+    for (const key in obj) {    
+      if (obj.hasOwnProperty(key)) {    // 只拷贝自身属性   
+        copy[key] = deepCopy(obj[key]); // 递归复制    
+      }  
+    }    
+    return copy;}
+  ```
+
+  **边界状况**：建议用三方库lodash.cloneDeep
+  1、基本数据类型：null，undefined，number，string，boolean直接返回
+  2、对象，数组 需要递归拷贝
+  3、循环引用，使用WeakMap 记录已处理的对象。
+
+  ```
+  function deepCopy(obj, cache = new WeakMap()) {
+    if (typeof obj !== 'object' || obj === null) return obj;
+    
+    // 处理循环引用
+    if (cache.has(obj)) return cache.get(obj);
+    
+    const copy = Array.isArray(obj) ? [] : {};
+    cache.set(obj, copy); // 缓存当前对象
+    
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        copy[key] = deepCopy(obj[key], cache); // 递归并传递缓存
+      }
+    }
+    
+    return copy;
+  }
+  
+  // 测试循环引用
+  const a = {};
+  a.b = a; // 循环引用
+  const copy = deepCopy(a);
+  console.log(copy.b === copy); // 输出: true（正确处理循环引用）
+  ```
+
+  4、特殊对象：日期对象（Date）return new Date(obj.getTime());正则表达式（RegExp）return new RegExp(obj);Map/Set；Function
+  5、不可枚举属性，Symbol
+  6、原型链
+
+# useStrict
+
+1、禁止使用未声明变量，重复声明 
+
+2、禁止删除变量 
+
+3、this是undefined
+
+4、只读属性不能赋值 
+
+5、防止不安全才做 
+
+6、严格解析
+
+# 柯里化
+
+将多参数函数转换为一系列单参数函数的技术，将f(a, b, c) 转换为 f(a)(b)(c) 
+
+```javascript
+function curry(fn) {  
+	return function curried(...args) {    
+		if (args.length >= fn.length) { // 参数够了，执行原函数      
+      return fn(...args);    }
+		else { // 参数不够，返回新函数继续收集      
+			return function(...moreArgs) { return curried(...args, ...moreArgs); };    
+    }  
+  };
+}
+const add = (a, b, c) => a + b + c;
+const curriedAdd = curry(add);
+//curriedAdd(1)(2)(3)，curriedAdd(1, 2)(3)，curriedAdd(1)(2, 3)
+```
+
+# 继承
+
+**原型链继承**
+
+```
+function Parent() {
+  this.name = 'parent';
+  this.colors = ['red', 'blue'];
+}
+
+Parent.prototype.say = function() {
+  console.log('hello');
+}
+
+function Child() {}
+Child.prototype = Object.create(Parent.prototype); // 直接使用父类实例作为子类原型
+Child.prototype.constructor = Child;
+```
+
+**组合继承**
+
+```
+function Parent(name) {
+  this.name = name;
+  this.colors = ['red', 'blue'];
+}
+
+Parent.prototype.say = function() {
+  console.log('hello');
+}
+
+function Child(name, age) {
+  Parent.call(this, name); // 第一次调用父类构造函数
+  this.age = age;
+}
+
+Child.prototype = new Parent(); // 第二次调用父类构造函数
+Child.prototype.constructor = Child;
+```
+
+**寄生组合继承**
+
+```
+function Parent(name) {
+  this.name = name;
+  this.colors = ['red', 'blue'];
+}
+
+Parent.prototype.say = function() {
+  console.log('hello');
+}
+
+function Child(name, age) {
+  Parent.call(this, name); // 继承属性
+  this.age = age;
+}
+
+// 继承原型
+Child.prototype = Object.create(Parent.prototype);
+Child.prototype.constructor = Child;
+
+// 子类可以添加自己的方法
+Child.prototype.play = function() {
+  console.log('playing');
+};
+```
+
+**类继承**
+
+```
+class Parent {
+  constructor(name) {
+    this.name = name;
+    this.colors = ['red', 'blue'];
+  }
+  
+  say() {
+    console.log('hello');
+  }
+}
+
+class Child extends Parent {
+  constructor(name, age) {
+    super(name); // 必须先调用super
+    this.age = age;
+  }
+  
+  play() {
+    console.log('playing');
+  }
+}
+```
+
+# 数组操作类型常用方法
+
+| **分类**        | **方法及示例**                                               |
+| --------------- | ------------------------------------------------------------ |
+| **创建**        | [], Array.of(num), Array.from(string或{ length: 3 }, (_, i) => i) |
+| **访问**        | [], at(), indexOf(), includes(), find()                      |
+| **修改**        | **push(), pop(), shift(), unshift(), splice()**   `array.splice(start, deleteCount, item1, item2, ...);` |
+| **遍历**        | for, for (const item of arr)  ，arr.forEach((item, index, array) =>{}) |
+| **转换**        | map(), filter(), 累加reduce(), 扁平flat(), flatMap()先 map 再 flat.       //[1, 2, 3].reduce((acc, curr) => acc + curr, 0);       nested.flat(Infinity).    ["Hello world", "Goodbye "].flatMap(s => s.split(' '))` |
+| **查找 / 判断** | arr.indexOf()索引，arr.includes()返回true;<br/>every(), some()至少一个,arr.find(x => x > 25)第一个满足元素，arr.findIndex(x => x > 25)索引 |
+| **排序 **       | **sort(), reverse()**                                        |
+| **合并 / 分割** | concat(), slice(), 展开语法 [...arr]  例merged.slice(2, 5); // 从索引2到5（不包含5） |
+
+# 对象操作
+
+**`Object.keys(obj)`**：自身可枚举属性名
+
+**```obj.hasOwnProperty(key)```**:判断对象属性
+
+**`Object.getOwnPropertyNames(obj)`**:获取对象自身所有属性名
+
+**`Object.defineProperty(obj, 'b', { value: 2, enumerable: false });`**:设置对象属性
+
+
+
+# 遍历for
+
+| **方法**       | **速度（大致排序）** | **可中断性**                                       | **适用数据结构**             |
+| -------------- | -------------------- | -------------------------------------------------- | ---------------------------- |
+| **for 循环**   | 最快                 | ✅ `break`（完全终止）和 `continue`（跳过当前迭代） | 数组                         |
+| **for...of**   | 较快                 | ✅                                                  | 可迭代对象（数组、Set、Map） |
+| **forEach**    | 中等                 | ❌return仅跳过当前回调，无法终止循环                | 数组                         |
+| **map/filter** | 较慢（需创建新数组） | ❌                                                  | 数组                         |
+| **for...in**   | 最慢（遍历原型链）   | ✅                                                  | 对象                         |
+
+**Object.entries()**：返回 `[key, value]` 对的数组
+
+**Object.keys()**：返回[key]数组
+
+# 获取元素位置
+
+```javascript
+const element = document.getElementById('myElement');  //getElementsByClassName,querySelector
+var rect = element.getBoundingClientRect();
+top: rect.top + window.scrollY,
+right: rect.right,
+bottom: rect.bottom,
+left: rect.left + window.scrollX
+```
+
+# 判断是否是子元素
+
+```javascript
+// a在b内部
+const isChild = b !== a && b.contains(a); //true✅
+const relationship = b.compareDocumentPosition(a); //16在
+function isChildOf(a, b) {
+  let current = a;
+  while (current) {
+    if (current === b) return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+const isChild = a.closest('#b') === b; // 假设 b 的 ID 是 'b'
+```
+
+# 水平垂直居中
+
+![img](https://api2.mubu.com/v3/document_image/28886397_4bb484cd-aa3f-4f86-f132-db99265d8c14.png)
+
+# flex
+
+- 容器6个属性
+  - flex-direction属性决定主轴的方向
+  - flex-wrap 是否换行
+  - flex-flow 是上面两个的缩写
+  - justify-content属性定义了项目在主轴上的对齐方式。
+  - align-items属性定义项目在交叉轴上如何对齐。
+  - align-content属性定义了多根轴线的对齐方式。如果项目只有一根轴线，该属性不起作用。
+- 项目的6个属性
+  - order属性定义项目的排列顺序。数值越小，排列越靠前，默认为0。
+  - flex-grow 放大比例 默认为0，即如果存在剩余空间，也不放大。
+    - 如果所有项目的flex-grow属性都为1，则它们将等分剩余空间（如果有的话）。如果一个项目的flex-grow属性为2，其他项目都为1，则前者占据的剩余空间将比其他项多一倍。
+  - flex-shrink 缩小比例 默认为1，即如果空间不足，该项目将缩小。
+    - 如果所有项目的flex-shrink属性都为1，当空间不足时，都将等比例缩小。如果一个项目的flex-shrink属性为0，其他项目都为1，则空间不足时，前者不缩小
+  - flex-basis 分配多余空间之前，项目占据的主轴空间.
+    - 浏览器根据这个属性，计算主轴是否有多余空间。它的默认值为auto，即项目的本来大小。
+  - flex 上面三个的缩写 默认值为0 1 auto。后两个属性可选。
+    - 该属性有两个快捷值：auto (1 1 auto) 和 none (0 0 auto)。
+  - align-self 允许单个项目有与其他项目不一样的对齐方式。可覆盖align-items属性。默认值为auto，表示继承父元素的align-items属性，如果没有父元素，则等同于stretch。
+
+**flex: 1**
+
+```
+flex-grow: 1;    /* 允许元素增长以填充可用空间 */
+flex-shrink: 1;  /* 允许元素缩小以适应容器 */
+flex-basis: 0%;  /* 元素的初始大小为 0 */
+```
+
+# css 选择器的优先级
+
+!important > 行内样式 > id选择器 > 类选择器 > 标签选择器 > 通配符选择器 > 继承 > 浏览器默认样式
+
+| **选择器类型**   | **权重值** | **示例**                   |
+| ---------------- | ---------- | -------------------------- |
+| **内联样式**     | `1000`     | `<div style="color: red">` |
+| **ID 选择器**    | `100`      | `#header`                  |
+| **类选择器**     | `10`       | `.container`               |
+| **属性选择器**   | `10`       | `[type="text"]`            |
+| **伪类选择器**   | `10`       | `:hover`, `:nth-child(2)`  |
+| **元素选择器**   | `1`        | `div`, `p`                 |
+| **伪元素选择器** | `1`        | `::before`, `::first-line` |
+| **通配符选择器** | `0`        | `*`                        |
+| **继承的样式**   | `无权重`   | 由父元素继承的样式         |
+
+多个结合使用：累加
+
+相同：后定义的优先级高
+
+# 行内标签、块内标签
+
+**块标签：div p h1-h6 hr ul ol li dl dd dt form** 
+
+​      ①支持宽高，自上而下排列
+
+​      ②不受空格影响
+
+​      ③一般用于其他标签的容器
+
+​      ④默认宽度为100%（独占一行）。
+
+**行内标签：span i a b strong em sub sup u label br font**
+
+​       ①不支持宽高（宽高根据内容大小自动撑开），自左向右排列
+
+​       ②受空格影响
+
+​       ③不独占一行
+
+**行内块标签：img  textarea  input**
+
+​        ①支持宽高，自左向右排列
+
+​        ②受空格影响
+
+​        ③不独占一行
+
+**标签之间的转换**
+
+display：inline（转为行内元素）
+
+​       inline-block（转为行内块元素）
+
+​       block（转为块元素）
+
+​       none（隐藏 不显示）
+
+注意：当元素浮动（float）时会转化成行内块元素特点。
+
+# **position属性值**
+
+1. **static**（默认值）：正常文档流，`top`、`right`、`bottom`、`left` 和 `z-index` 属性无效。
+2. **relative**：正常文档流，通过 `top`、`right`、`bottom`、`left` 调整位置，相对于其正常位置偏移。可设置 `z-index` 
+3. **absolute**：脱离文档流，定位相对于最近的**已定位祖先元素**（relative`、`absolute`、`fixed` 或 `sticky），同2.
+4. **fixed**：脱离文档流，定位相对于**浏览器视口**，同2。用于实现固定导航栏、悬浮按钮等。
+5. **sticky**：正常文档流，滚动到特定位置时变为固定定位。必须有`top`、`right`、`bottom`、`left`。用于实现粘性标题、侧边栏
+
+# 伪元素、伪类
+
+| **对比维度**     | **伪元素**                                                   | **伪类**                                                     |
+| ---------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **本质**         | 创建虚拟元素（文档树外）                                     | 描述元素状态 / 位置（文档树内）                              |
+| **语法**         | 使用 **双冒号 `::`**（CSS3 规范）                            | 使用 **单冒号 `:`**                                          |
+| **数量**         | 一个选择器中最多使用 **1 个伪元素**                          | 一个选择器中可叠加多个伪类                                   |
+| **操作对象**     | 操作元素的**部分内容或虚拟内容**                             | 操作元素的**整体状态或位置**                                 |
+| **是否生成内容** | 可生成新内容（如 `::before`/`::after`），必须设置 content 属性 | 不生成新内容，仅匹配状态                                     |
+| **常见用途**     | - 清除浮动（`::after`） - 添加装饰性内容 - 操作文本首字母 / 行 | - 交互状态（`:hover`/`:focus`） - 结构伪类（`:nth-child`） - 动态状态（`:disabled`） |
+
+# BFC
+
+**BFC（Block Formatting Context）** 是 CSS 中一种独立的渲染区域，它规定了内部元素如何布局，以及与外部元素的交互规则。
+
+解决常见的布局问题（如高度塌陷、外边距重叠等）。
+
+**触发 BFC 的条件**
+
+1. **浮动元素**：`float` 值为 `left`/`right`（非 `none`）。
+2. **绝对定位元素**：`position` 值为 `absolute`/`fixed`。
+3. **行内块元素**：`display` 值为 `inline-block`。
+4. **表格相关元素**：`display` 值为 `table-cell`/`table-caption` 等。
+5. **overflow 非默认值**：`overflow` 值为 `auto`/`scroll`/`hidden`（非 `visible`）。
+6. **弹性 / 网格容器**：`display` 值为 `flex`/`grid` 及其衍生值的直接子元素。
+
+# **盒模型**
+
+**标准盒模型**
+
+- width就是content
+
+**怪异盒模型（IE 盒模型）**
+
+- width=content+padding+bording
+
+- 适合固定宽高的布局（如响应式设计）
+
+- ```
+  box-sizing: border-box
+  ```
+
+# type和interface
+
+| **特性**            | **`interface`** | **`type`**                 |
+| ------------------- | --------------- | -------------------------- |
+| 重复定义合并        | ✅（自动合并）   | ❌（报错）                  |
+| 定义基本类型        | ❌               | ✅（如 `type ID = string`） |
+| 定义联合 / 交叉类型 | ❌               | ✅（如 `type A = B & C`）   |
+| 类实现              | ✅               | 仅支持对象类型的 type      |
+| 扩展方式            | `extends`       | 交叉类型 `&`               |
+| 映射类型 / 条件类型 | ❌               | ✅                          |
+
+# any和unknow
+
+any：任何类型，不推荐
+
+unknow：any的安全写法，使用前先校验类型
+
+# TCP和UDP
+
+| 特性         | TCP                          | UDP                         |
+| ------------ | ---------------------------- | --------------------------- |
+| **连接性**   | 面向连接（三次握手）         | 无连接（直接发送）          |
+| **可靠性**   | 可靠（确认机制、重传、排序） | 不可靠（可能丢包、乱序）    |
+| **传输效率** | 低（头部开销 20 字节）       | 高（头部开销 8 字节）       |
+| **传输方式** | 字节流（无边界）             | 数据报（有边界，不拆分）    |
+| **拥塞控制** | 有（慢启动、拥塞避免）       | 无（可能导致网络拥塞）      |
+| **应用场景** | HTTP、SMTP、FTP、数据库      | DNS、视频流、实时游戏、直播 |
